@@ -645,6 +645,11 @@ document.addEventListener('click', (e) => {
       render('s45a');
       break;
 
+    case 'crisisBack':
+      renderGroups();
+      show('s31');
+      break;
+
     case 'chooseReady':
       renderGroups();
       show('s31');
