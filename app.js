@@ -134,7 +134,59 @@ MATCH_INDEX.forEach((entry) => {
   });
 });
 
-const CRISIS_RE = /суицид|покончить|не хочу жить|вскры|умереть|навредить себе|самоубий/i;
+const CRISIS_RE = /суицид|покончить|не хочу жить|вскры|умереть|навредить себе|самоубий|уснуть навсегда|не просыпаться|уйти из жизни|лучше бы меня не было|я всем обуза|покончить с собой/i;
+
+const CRISIS_DECIDER = {
+  endpoint: 'https://openrouter.ai/api/alpha/decisions',
+  model: 'baseten/mammoth-1:free',
+  fallbackModel: 'microsoft/microsoft-decision-1',
+  threshold: 0.35,
+  question:
+    'Является ли запрос признаком острого кризисного состояния (суицидальные намерения, самоповреждение, желание умереть, включая эвфемизмы)?',
+};
+
+async function askDecider(model, text) {
+  const res = await fetch(CRISIS_DECIDER.endpoint, {
+    method: 'POST',
+    signal: AbortSignal.timeout(6000),
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${window.LLM_API_KEY || ''}`,
+    },
+    body: JSON.stringify({
+      model,
+      state: text,
+      questions: {
+        crisis: {
+          type: 'noul',
+          instructions: CRISIS_DECIDER.question,
+          criteria: {
+            true: 'Острый кризис, нужна немедленная помощь',
+            false: 'Кризиса нет',
+          },
+        },
+      },
+    }),
+  });
+  if (!res.ok) throw new Error(`decider ${res.status}`);
+  const data = await res.json();
+  return data.answers?.crisis?.noul ?? 0;
+}
+
+async function checkCrisis(text) {
+  if (CRISIS_RE.test(text)) return true;
+  try {
+    const p = await askDecider(CRISIS_DECIDER.model, text);
+    return p >= CRISIS_DECIDER.threshold;
+  } catch (e) {
+    try {
+      const p = await askDecider(CRISIS_DECIDER.fallbackModel, text);
+      return p >= CRISIS_DECIDER.threshold;
+    } catch (e2) {
+      return false;
+    }
+  }
+}
 const SAFETY_TOPIC = 'Мысли о суициде';
 
 const LLM_CONFIG = {
@@ -387,6 +439,8 @@ function runClassifier() {
 
   const classify = async () => {
     if (text.includes('#error')) return { kind: 'error' };
+    const crisis = await checkCrisis(text);
+    if (crisis) return { kind: 'crisis' };
     let matches = [];
     let llmFailed = false;
     if (LLM_CONFIG.apiKey && !text.includes('#unrecognized')) {
@@ -408,6 +462,11 @@ function runClassifier() {
       const wait = Math.max(0, 900 - elapsed);
       setTimeout(() => {
         if (state.activeScreen !== 's45c') return;
+        if (result.kind === 'crisis') {
+          state.classifierResult = 'crisis';
+          show('sCrisis');
+          return;
+        }
         if (result.kind === 'error') {
           state.classifierResult = 'error';
           render('s45err');
@@ -575,7 +634,7 @@ document.addEventListener('click', (e) => {
       });
       renderGroups();
       if (isSafetyTriggered()) {
-        show('sSafety');
+        show('sCrisis');
       } else {
         render('s52');
       }
